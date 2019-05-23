@@ -17,6 +17,7 @@ from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import Axes3D
 
 from tf import transformations as tft
+import math
 
 from geometry_msgs.msg import Quaternion
 from rqt_quaternion_view.quaternion_view_options import SimpleSettingsDialog
@@ -68,6 +69,8 @@ class QuaternionView(Plugin):
 		self.manual_mode = False
 		self.val = Quaternion(0.0,0.0,0.0,1.0)
 
+		self.set_manual_mode(False)
+
 		self.plot_3d_figure = Figure()
 		self.plot_3d_figure.patch.set_facecolor('white')
 		self.plot_3d_canvas = FigureCanvas(self.plot_3d_figure)
@@ -93,12 +96,15 @@ class QuaternionView(Plugin):
 		instance_settings.set_value("manual_mode", self.manual_mode)
 
 	def restore_settings(self, plugin_settings, instance_settings):
-		self.topic_name = instance_settings.value("topic_name")
-		self.topic_type = instance_settings.value("topic_type")
-		self.topic_content = instance_settings.value("topic_content")
-		self.manual_mode = instance_settings.value("manual_mode")
+		self.topic_name = str(instance_settings.value("topic_name"))
+		self.topic_type = str(instance_settings.value("topic_type"))
+		self.topic_content = str(instance_settings.value("topic_content"))
+		self.manual_mode = bool(instance_settings.value("manual_mode"))
 
-		if self.topic_name and self.topic_type and self.topic_content:
+		if self.manual_mode:
+			self.set_manual_mode(True)
+		elif self.topic_name and self.topic_type and self.topic_content:
+			self.set_manual_mode(False)
 			self.sub = rospy.Subscriber(self.topic_name, self.get_topic_class_from_type(self.topic_type), self.sub_callback)
 
 	def trigger_configuration(self):
@@ -169,22 +175,41 @@ class QuaternionView(Plugin):
 
 		self._draw.emit()
 
+	def normalize_tf_quaternion(self,q):
+		d = math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
+
+		if d > 0.0:
+			q[0] = q[0]/d
+			q[1] = q[1]/d
+			q[2] = q[2]/d
+			q[3] = q[3]/d
+		else:
+			#Invalid quaternion, reset
+			q[0] = 0.0
+			q[1] = 0.0
+			q[2] = 0.0
+			q[3] = 1.0
+
+		return q
+
 	def update_display(self):
 		self.clear_plot()
 
 		x = [1.0,0.0,0.0,0.0]
-		z = [0.9,0.0,0.05,0.0]
-		q = [self.val.x, self.val.y, self.val.z,self.val.w]
+		x2 = [0.8,0.0,0.0,0.0]
+		z = [0.8,0.0,0.1,0.0]
+		q = self.normalize_tf_quaternion([self.val.x, self.val.y, self.val.z,self.val.w])
 
 		xr = tft.quaternion_multiply(tft.quaternion_multiply(q,x),tft.quaternion_inverse(q))
+		x2r = tft.quaternion_multiply(tft.quaternion_multiply(q,x2),tft.quaternion_inverse(q))
 		zr = tft.quaternion_multiply(tft.quaternion_multiply(q,z),tft.quaternion_inverse(q))
-		e = tft.euler_from_quaternion(q)
 
 		self.plot_3d_ax.plot([0.0,0.5], [0.0,0.0], [0.0,0.0], 'r-')
 		self.plot_3d_ax.plot([0.0,0.0], [0.0,0.5], [0.0,0.0], 'g-')
 		self.plot_3d_ax.plot([0.0,0.0], [0.0,0.0], [0.0,0.5], 'b-')
 		self.plot_3d_ax.plot([0.0,xr[0]], [0.0,xr[1]], [0.0,xr[2]], 'k-', linewidth=2)
 		self.plot_3d_ax.plot([zr[0],xr[0]], [zr[1],xr[1]], [zr[2],xr[2]], 'k-', linewidth=2)
+		self.plot_3d_ax.plot([zr[0],x2r[0]], [zr[1],x2r[1]], [zr[2],x2r[2]], 'k-', linewidth=2)
 
 		self.plot_3d_ax.set_aspect('equal', 'box')
 		self.plot_3d_ax.set_xlim(-1.0, 1.0)
@@ -192,13 +217,102 @@ class QuaternionView(Plugin):
 		self.plot_3d_ax.set_zlim(-1.0, 1.0)
 
 		self.plot_3d_canvas.draw()
-		self._widget.input_q_w.setText('%.5f' % q[0])
-		self._widget.input_q_x.setText('%.5f' % q[1])
-		self._widget.input_q_y.setText('%.5f' % q[2])
-		self._widget.input_q_z.setText('%.5f' % q[3])
-		self._widget.input_e_r.setText('%.5f' % e[0])
-		self._widget.input_e_p.setText('%.5f' % e[0])
+
+		if not self.manual_mode:
+			self.update_normalized_displays()
+
+	def parse_float(self,text):
+		val = 0.0
+		try:
+			val = float(text)
+		except ValueError:
+			pass
+
+		return val
+
+	def manual_update(self, new_val=None, update_euler=True):
+		if type(new_val) is Quaternion:
+			self.val = new_val
+		else:
+			self.val = Quaternion(self.parse_float(self._widget.input_q_x.text()),
+								  self.parse_float(self._widget.input_q_y.text()),
+								  self.parse_float(self._widget.input_q_z.text()),
+								  self.parse_float(self._widget.input_q_w.text()))
+
+		if update_euler:
+			q = [self.val.x, self.val.y, self.val.z,self.val.w]
+			e = tft.euler_from_quaternion(q, axes='rzyx')
+
+			self._widget.input_e_r.setText('%.5f' % e[0])
+			self._widget.input_e_p.setText('%.5f' % e[0])
+			self._widget.input_e_y.setText('%.5f' % e[0])
+
+		self._draw.emit()
+
+	def manual_update_rpy(self):
+		q = tft.quaternion_from_euler(self.parse_float(self._widget.input_e_y.text()),
+									  self.parse_float(self._widget.input_e_p.text()),
+									  self.parse_float(self._widget.input_e_r.text()), axes='rzyx')
+
+		self._widget.input_q_w.setText('%.5f' % q[3])
+		self._widget.input_q_x.setText('%.5f' % q[0])
+		self._widget.input_q_y.setText('%.5f' % q[1])
+		self._widget.input_q_z.setText('%.5f' % q[2])
+
+		self.manual_update(new_val=Quaternion(q[0], q[1], q[2], q[3]), update_euler=False)
+
+	def update_normalized_displays(self):
+		q = self.normalize_tf_quaternion([self.val.x, self.val.y, self.val.z,self.val.w])
+		e = tft.euler_from_quaternion(q, axes='szyx')
+
+		self._widget.input_q_w.setText('%.5f' % q[3])
+		self._widget.input_q_x.setText('%.5f' % q[0])
+		self._widget.input_q_y.setText('%.5f' % q[1])
+		self._widget.input_q_z.setText('%.5f' % q[2])
+		self._widget.input_e_r.setText('%.5f' % e[2])
+		self._widget.input_e_p.setText('%.5f' % e[1])
 		self._widget.input_e_y.setText('%.5f' % e[0])
+
+
+	def set_manual_mode(self, manual):
+		if manual:
+			if self.sub is not None:
+				self.sub.unregister()
+
+			self._widget.input_q_w.textEdited.connect(self.manual_update)
+			self._widget.input_q_x.textEdited.connect(self.manual_update)
+			self._widget.input_q_y.textEdited.connect(self.manual_update)
+			self._widget.input_q_z.textEdited.connect(self.manual_update)
+			self._widget.input_e_r.textEdited.connect(self.manual_update_rpy)
+			self._widget.input_e_p.textEdited.connect(self.manual_update_rpy)
+			self._widget.input_e_y.textEdited.connect(self.manual_update_rpy)
+
+			self._widget.input_q_w.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_q_x.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_q_y.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_q_z.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_r.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_p.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_y.returnPressed.connect(self.update_normalized_displays)
+		else:
+			try:
+				self._widget.input_q_w.textEdited.disconnect()
+				self._widget.input_q_x.textEdited.disconnect()
+				self._widget.input_q_y.textEdited.disconnect()
+				self._widget.input_q_z.textEdited.disconnect()
+				self._widget.input_e_r.textEdited.disconnect()
+				self._widget.input_e_p.textEdited.disconnect()
+				self._widget.input_e_y.textEdited.disconnect()
+
+				self._widget.input_q_w.returnPressed.disconnect()
+				self._widget.input_q_x.returnPressed.disconnect()
+				self._widget.input_q_y.returnPressed.disconnect()
+				self._widget.input_q_z.returnPressed.disconnect()
+				self._widget.input_e_r.returnPressed.disconnect()
+				self._widget.input_e_p.returnPressed.disconnect()
+				self._widget.input_e_y.returnPressed.disconnect()
+			except TypeError:
+				pass
 
 	def open_settings_dialog(self):
 		"""Present the user with a dialog for choosing the topic to view,
@@ -224,8 +338,7 @@ class QuaternionView(Plugin):
 					self.manual_mode = bool(s[1])
 
 			if self.manual_mode:
-				if self.sub is not None:
-					self.sub.unregister()
+				self.set_manual_mode(True)
 			elif self.topic_name and self.topic_content:
 				self.topic_type, msg_class = self.get_topic_type(self.topic_name)
 				self.sub = rospy.Subscriber(self.topic_name, msg_class, self.sub_callback)
