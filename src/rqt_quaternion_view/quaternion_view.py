@@ -66,10 +66,14 @@ class QuaternionView(Plugin):
 		self.topic_name = ""
 		self.topic_type = ""
 		self.topic_content = ""
-		self.manual_mode = False
+		self.refresh_rate = 5.0
+		self.refresh_period = rospy.Duration(0)
+		self.time_last = rospy.Time(0)
+		self.manual_mode = True
 		self.val = Quaternion(0.0,0.0,0.0,1.0)
 
-		self.set_manual_mode(False)
+		self.update_refresh_period()
+		self.set_manual_mode(self.manual_mode)
 
 		self.plot_3d_figure = Figure()
 		self.plot_3d_figure.patch.set_facecolor('white')
@@ -93,18 +97,21 @@ class QuaternionView(Plugin):
 		instance_settings.set_value("topic_name", self.topic_name)
 		instance_settings.set_value("topic_type", self.topic_type)
 		instance_settings.set_value("topic_content", self.topic_content)
-		instance_settings.set_value("manual_mode", self.manual_mode)
+		instance_settings.set_value("refresh_rate", self.refresh_rate)
+		instance_settings.set_value("manual_mode", str(self.manual_mode))
 
 	def restore_settings(self, plugin_settings, instance_settings):
 		self.topic_name = str(instance_settings.value("topic_name"))
 		self.topic_type = str(instance_settings.value("topic_type"))
 		self.topic_content = str(instance_settings.value("topic_content"))
-		self.manual_mode = bool(instance_settings.value("manual_mode"))
+		self.manual_mode = (instance_settings.value("manual_mode") == "true")
+		self.refresh_rate = self.parse_float(instance_settings.value("refresh_rate"), default=5.0)
 
-		if self.manual_mode:
-			self.set_manual_mode(True)
-		elif self.topic_name and self.topic_type and self.topic_content:
-			self.set_manual_mode(False)
+		self.update_refresh_period()
+
+		self.set_manual_mode(self.manual_mode)
+
+		if (not self.manual_mode) and self.topic_name and self.topic_type and self.topic_content:
 			self.sub = rospy.Subscriber(self.topic_name, self.get_topic_class_from_type(self.topic_type), self.sub_callback)
 
 	def trigger_configuration(self):
@@ -156,24 +163,33 @@ class QuaternionView(Plugin):
 		return attr
 
 	def sub_callback(self, msg_in):
-		self.val = Quaternion(0.0,0.0,0.0,1.0)
+		now = rospy.Time.now()
 
-		try:
-			new_val = self.recursive_topic_content(msg_in, self.topic_content)
-			if type(new_val) is Quaternion:
-				val = new_val
-			else:
-				raise TypeError
-		except AttributeError as e:
-			rospy.logwarn("AttributeError: " + str(e))
-			self.sub.unregister()
-		except TypeError as e:
-			rospy.logwarn("Unable to display " + str(getattr(msg_in, self.topic_content).__class__.__name__) + " as a quaternion")
-			self.sub.unregister()
+		if now > self.time_last:
+			# Rate-limit refreshes
+			if now - self.time_last > self.refresh_period:
+				self.val = Quaternion(0.0,0.0,0.0,1.0)
 
-		self.val = val
+				try:
+					new_val = self.recursive_topic_content(msg_in, self.topic_content)
+					if type(new_val) is Quaternion:
+						val = new_val
+					else:
+						raise TypeError
+				except AttributeError as e:
+					rospy.logwarn("AttributeError: " + str(e))
+					self.sub.unregister()
+				except TypeError as e:
+					rospy.logwarn("Unable to display " + str(getattr(msg_in, self.topic_content).__class__.__name__) + " as a quaternion")
+					self.sub.unregister()
 
-		self._draw.emit()
+				self.val = val
+
+				self.time_last = now
+				self._draw.emit()
+		else:
+			# Timestep backwards, reset
+			self.time_last = rospy.Time(0)
 
 	def normalize_tf_quaternion(self,q):
 		d = math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
@@ -221,8 +237,8 @@ class QuaternionView(Plugin):
 		if not self.manual_mode:
 			self.update_normalized_displays()
 
-	def parse_float(self,text):
-		val = 0.0
+	def parse_float(self,text, default=0.0):
+		val = default
 		try:
 			val = float(text)
 		except ValueError:
@@ -276,6 +292,7 @@ class QuaternionView(Plugin):
 
 	def set_manual_mode(self, manual):
 		if manual:
+			print("Manual mode")
 			if self.sub is not None:
 				self.sub.unregister()
 
@@ -295,6 +312,7 @@ class QuaternionView(Plugin):
 			self._widget.input_e_p.returnPressed.connect(self.update_normalized_displays)
 			self._widget.input_e_y.returnPressed.connect(self.update_normalized_displays)
 		else:
+			print("Subscriber mode")
 			try:
 				self._widget.input_q_w.textEdited.disconnect()
 				self._widget.input_q_x.textEdited.disconnect()
@@ -314,6 +332,9 @@ class QuaternionView(Plugin):
 			except TypeError:
 				pass
 
+	def update_refresh_period(self):
+		self.refresh_period = rospy.Duration( 1.0 / self.refresh_rate )
+
 	def open_settings_dialog(self):
 		"""Present the user with a dialog for choosing the topic to view,
 		the data type, and other settings used to generate the HUD.
@@ -324,7 +345,8 @@ class QuaternionView(Plugin):
 
 		dialog = SimpleSettingsDialog(title='Quaternion View Options')
 		dialog.add_topic_list("topic_list", str(self.topic_name), "Topics")
-		dialog.add_combobox_empty("content_list", "Contents", self.topic_content)
+		dialog.add_combobox_empty("content_list", "Contents", str(self.topic_content))
+		dialog.add_lineedit("refresh_rate", str(self.refresh_rate), "Refresh Rate")
 		dialog.add_checkbox("manual_mode", bool(self.manual_mode), "Manual Mode")
 
 		settings = dialog.get_settings();
@@ -334,8 +356,12 @@ class QuaternionView(Plugin):
 					self.topic_name = str(s[1])
 				elif s[0] == "content_list":
 					self.topic_content = str(s[1])
+				elif s[0] == "refresh_rate":
+					self.refresh_rate = self.parse_float(s[1])
 				elif s[0] == "manual_mode":
 					self.manual_mode = bool(s[1])
+
+			self.update_refresh_period()
 
 			if self.manual_mode:
 				self.set_manual_mode(True)

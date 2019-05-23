@@ -35,7 +35,8 @@ class SimpleSettingsDialog(QDialog):
 	def add_checkbox(self, name, checked, title=""):
 		checkbox = QCheckBox()
 		checkbox.setObjectName(name)
-		checkbox.setCheckState(checked)
+		checkbox.setCheckState(bool(checked))
+		checkbox.setTristate(False)
 		checkbox.setText(title)
 
 		self.group_area.layout().addWidget(checkbox)
@@ -148,6 +149,13 @@ class SimpleSettingsDialog(QDialog):
 						results.append(r)
 				elif type(item) is QLineEdit:
 					r = [name, item.text()]
+
+					if results is None:
+						results = [r]
+					else:
+						results.append(r)
+				elif type(item) is QCheckBox:
+					r = [name, item.checkState()]
 
 					if results is None:
 						results = [r]
