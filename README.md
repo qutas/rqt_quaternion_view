@@ -1,8 +1,10 @@
 # rqt_quaternion_view
-A display for showing quaternion information
+A display for showing quaternion information.
+
+![Screenshot](/resource/screenshot.png)
 
 ## Usage
-The mode of operation can be configured in the _rqt_ gear tool.
+The mode of operation can be configured in the _rqt_ gear tool. Euler angles are calculated in aerospace ZYX order.
 
 #### Manual Mode
 Allows the user to input values directly into either the quaternion or euler angle fields. Pressing `Enter` during editting a field will instruct the application to normalize and update all text fields.
