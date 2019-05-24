@@ -101,18 +101,26 @@ class QuaternionView(Plugin):
 		instance_settings.set_value("manual_mode", str(self.manual_mode))
 
 	def restore_settings(self, plugin_settings, instance_settings):
-		self.topic_name = str(instance_settings.value("topic_name"))
-		self.topic_type = str(instance_settings.value("topic_type"))
-		self.topic_content = str(instance_settings.value("topic_content"))
-		self.manual_mode = (instance_settings.value("manual_mode") == "true")
-		self.refresh_rate = self.parse_float(instance_settings.value("refresh_rate"), default=5.0)
+		topic_name = instance_settings.value("topic_name")
+		topic_type = instance_settings.value("topic_type")
+		topic_content = instance_settings.value("topic_content")
+		manual_mode = instance_settings.value("manual_mode")
+		refresh_rate = instance_settings.value("refresh_rate")
 
-		self.update_refresh_period()
+		if (topic_name is not None) and (topic_type is not None) and (topic_content is not None) and (manual_mode is not None) and (refresh_rate is not None):
 
-		self.set_manual_mode(self.manual_mode)
+			self.topic_name = str(topic_name)
+			self.topic_type = str(topic_type)
+			self.topic_content = str(topic_content)
+			self.manual_mode = (str(manual_mode).lower() == "true")
+			self.refresh_rate = self.parse_float(refresh_rate, default=5.0)
 
-		if (not self.manual_mode) and self.topic_name and self.topic_type and self.topic_content:
-			self.sub = rospy.Subscriber(self.topic_name, self.get_topic_class_from_type(self.topic_type), self.sub_callback)
+			self.update_refresh_period()
+
+			self.set_manual_mode(self.manual_mode)
+
+			if (not self.manual_mode) and self.topic_name and self.topic_type and self.topic_content:
+				self.sub = rospy.Subscriber(self.topic_name, self.get_topic_class_from_type(self.topic_type), self.sub_callback)
 
 	def trigger_configuration(self):
 		self.open_settings_dialog()
@@ -237,16 +245,16 @@ class QuaternionView(Plugin):
 		if not self.manual_mode:
 			self.update_normalized_displays()
 
-	def parse_float(self,text, default=0.0):
+	def parse_float(self, text, default=0.0):
 		val = default
 		try:
 			val = float(text)
-		except ValueError:
+		except (ValueError, TypeError):
 			pass
 
 		return val
 
-	def manual_update(self, new_val=None, update_euler=True):
+	def manual_update(self, _=None, new_val=None, update_euler=True):
 		if type(new_val) is Quaternion:
 			self.val = new_val
 		else:
@@ -262,20 +270,46 @@ class QuaternionView(Plugin):
 			self._widget.input_e_r.setText('%.5f' % e[0])
 			self._widget.input_e_p.setText('%.5f' % e[0])
 			self._widget.input_e_y.setText('%.5f' % e[0])
+			self._widget.input_e_r_deg.setText('%.5f' % math.degrees(e[2]))
+			self._widget.input_e_p_deg.setText('%.5f' % math.degrees(e[1]))
+			self._widget.input_e_y_deg.setText('%.5f' % math.degrees(e[0]))
 
 		self._draw.emit()
 
-	def manual_update_rpy(self):
-		q = tft.quaternion_from_euler(self.parse_float(self._widget.input_e_y.text()),
-									  self.parse_float(self._widget.input_e_p.text()),
-									  self.parse_float(self._widget.input_e_r.text()), axes='rzyx')
+	def manual_update_rpy(self, _=None, new_val=None, update_euler_degrees=True):
+		yaw = 0.0
+		pitch = 0.0
+		roll = 0.0
+
+		if new_val is None:
+			yaw = self.parse_float(self._widget.input_e_y.text())
+			pitch = self.parse_float(self._widget.input_e_p.text())
+			roll = self.parse_float(self._widget.input_e_r.text())
+		else:
+			yaw = new_val[0]
+			pitch = new_val[1]
+			roll = new_val[2]
+
+		q = tft.quaternion_from_euler(yaw, pitch, roll, axes='rzyx')
 
 		self._widget.input_q_w.setText('%.5f' % q[3])
 		self._widget.input_q_x.setText('%.5f' % q[0])
 		self._widget.input_q_y.setText('%.5f' % q[1])
 		self._widget.input_q_z.setText('%.5f' % q[2])
 
+		if update_euler_degrees:
+			self._widget.input_e_r_deg.setText('%.5f' % math.degrees(roll))
+			self._widget.input_e_p_deg.setText('%.5f' % math.degrees(pitch))
+			self._widget.input_e_y_deg.setText('%.5f' % math.degrees(yaw))
+
 		self.manual_update(new_val=Quaternion(q[0], q[1], q[2], q[3]), update_euler=False)
+
+	def manual_update_rpy_deg(self, _=None):
+		yaw = math.radians(self.parse_float(self._widget.input_e_y_deg.text()))
+		pitch = math.radians(self.parse_float(self._widget.input_e_p_deg.text()))
+		roll = math.radians(self.parse_float(self._widget.input_e_r_deg.text()))
+
+		self.manual_update_rpy(new_val=[yaw,pitch,roll], update_euler_degrees=False)
 
 	def update_normalized_displays(self):
 		q = self.normalize_tf_quaternion([self.val.x, self.val.y, self.val.z,self.val.w])
@@ -288,7 +322,9 @@ class QuaternionView(Plugin):
 		self._widget.input_e_r.setText('%.5f' % e[2])
 		self._widget.input_e_p.setText('%.5f' % e[1])
 		self._widget.input_e_y.setText('%.5f' % e[0])
-
+		self._widget.input_e_r_deg.setText('%.5f' % math.degrees(e[2]))
+		self._widget.input_e_p_deg.setText('%.5f' % math.degrees(e[1]))
+		self._widget.input_e_y_deg.setText('%.5f' % math.degrees(e[0]))
 
 	def set_manual_mode(self, manual):
 		if manual:
@@ -303,6 +339,9 @@ class QuaternionView(Plugin):
 			self._widget.input_e_r.textEdited.connect(self.manual_update_rpy)
 			self._widget.input_e_p.textEdited.connect(self.manual_update_rpy)
 			self._widget.input_e_y.textEdited.connect(self.manual_update_rpy)
+			self._widget.input_e_r_deg.textEdited.connect(self.manual_update_rpy_deg)
+			self._widget.input_e_p_deg.textEdited.connect(self.manual_update_rpy_deg)
+			self._widget.input_e_y_deg.textEdited.connect(self.manual_update_rpy_deg)
 
 			self._widget.input_q_w.returnPressed.connect(self.update_normalized_displays)
 			self._widget.input_q_x.returnPressed.connect(self.update_normalized_displays)
@@ -311,6 +350,9 @@ class QuaternionView(Plugin):
 			self._widget.input_e_r.returnPressed.connect(self.update_normalized_displays)
 			self._widget.input_e_p.returnPressed.connect(self.update_normalized_displays)
 			self._widget.input_e_y.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_r_deg.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_p_deg.returnPressed.connect(self.update_normalized_displays)
+			self._widget.input_e_y_deg.returnPressed.connect(self.update_normalized_displays)
 		else:
 			print("Subscriber mode")
 			try:
@@ -321,6 +363,9 @@ class QuaternionView(Plugin):
 				self._widget.input_e_r.textEdited.disconnect()
 				self._widget.input_e_p.textEdited.disconnect()
 				self._widget.input_e_y.textEdited.disconnect()
+				self._widget.input_e_r_deg.textEdited.disconnect()
+				self._widget.input_e_p_deg.textEdited.disconnect()
+				self._widget.input_e_y_deg.textEdited.disconnect()
 
 				self._widget.input_q_w.returnPressed.disconnect()
 				self._widget.input_q_x.returnPressed.disconnect()
@@ -329,6 +374,9 @@ class QuaternionView(Plugin):
 				self._widget.input_e_r.returnPressed.disconnect()
 				self._widget.input_e_p.returnPressed.disconnect()
 				self._widget.input_e_y.returnPressed.disconnect()
+				self._widget.input_e_r_deg.returnPressed.disconnect()
+				self._widget.input_e_p_deg.returnPressed.disconnect()
+				self._widget.input_e_y_deg.returnPressed.disconnect()
 			except TypeError:
 				pass
 
